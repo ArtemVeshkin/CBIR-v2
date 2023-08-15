@@ -26,74 +26,71 @@ class Autoencoder(pl.LightningModule):
         self.val_batch_masks = []
         self.test_batch_masks = []
 
+    @staticmethod
+    def encoder_block(in_channels, out_channels, stride=2, padding=1):
+        return nn.Sequential(
+            nn.Conv2d(in_channels, in_channels, 3, padding=1, bias=False),
+            nn.BatchNorm2d(in_channels),
+            nn.LeakyReLU(True),
+            nn.Conv2d(in_channels, out_channels, 3, stride, padding, bias=False),
+            nn.BatchNorm2d(out_channels),
+            nn.LeakyReLU(True)
+        )
+
+    @staticmethod
+    def decoder_block(in_channels, out_channels, kernel_size=4, stride=2, padding=1, last_relu=True):
+        block = [
+            nn.ConvTranspose2d(in_channels, out_channels, kernel_size, stride, padding, bias=False),
+            nn.BatchNorm2d(out_channels),
+            nn.LeakyReLU(True),
+            nn.Conv2d(out_channels, out_channels, 3, padding=1, bias=False),
+            nn.BatchNorm2d(out_channels)
+        ]
+        if last_relu:
+            block.append(nn.LeakyReLU(True))
+        return nn.Sequential(*block)
+
     def init_model(self, hparams):
+        nfe = hparams.nfe
+        nz  = hparams.nz
+        nfd = hparams.nfd
         self.encoder = nn.Sequential(
             # input 3 x 256 x 256
-            nn.Conv2d(3, hparams.nfe, 4, 2, 1, bias=False),
-            nn.BatchNorm2d(hparams.nfe),
-            nn.LeakyReLU(True),
+            self.encoder_block(3, nfe),
             # input (nfe) x 128 x 128
-            nn.Conv2d(hparams.nfe, hparams.nfe * 2, 4, 2, 1, bias=False),
-            nn.BatchNorm2d(hparams.nfe * 2),
-            nn.LeakyReLU(True),
+            self.encoder_block(nfe, nfe * 2),
             # input (nfe*2) x 64 x 64
-            nn.Conv2d(hparams.nfe * 2, hparams.nfe * 4, 4, 2, 1, bias=False),
-            nn.BatchNorm2d(hparams.nfe * 4),
-            nn.LeakyReLU(True),
+            self.encoder_block(nfe * 2, nfe * 4),
             # input (nfe*4) x 32 x 32
-            nn.Conv2d(hparams.nfe * 4, hparams.nfe * 8, 4, 2, 1, bias=False),
-            nn.BatchNorm2d(hparams.nfe * 8),
-            nn.LeakyReLU(True),
+            self.encoder_block(nfe * 4, nfe * 8),
             # input (nfe*8) x 16 x 16
-            nn.Conv2d(hparams.nfe * 8, hparams.nfe * 16, 4, 2, 1, bias=False),
-            nn.BatchNorm2d(hparams.nfe * 16),
-            nn.LeakyReLU(True),
+            self.encoder_block(nfe * 8, nfe * 16),
             # input (nfe*16) x 8 x 8
-            nn.Conv2d(hparams.nfe * 16, hparams.nfe * 32, 4, 2, 1, bias=False),
-            nn.BatchNorm2d(hparams.nfe * 32),
-            nn.LeakyReLU(True),
+            self.encoder_block(nfe * 16, nfe * 32),
             # input (nfe*32) x 4 x 4
-            nn.Conv2d(hparams.nfe * 32, hparams.nfe * 64, 4, 2, 1, bias=False),
-            nn.BatchNorm2d(hparams.nfe * 64),
-            nn.LeakyReLU(True),
+            self.encoder_block(nfe * 32, nfe * 64),
             # input (nfe*64) x 2 x 2
-            nn.Conv2d(hparams.nfe * 64, hparams.nz, 2, 1, 0, bias=False),
-            nn.BatchNorm2d(hparams.nz),
-            nn.LeakyReLU(True)
+            self.encoder_block(nfe * 64, nz),
             # output (nz) x 1 x 1
         )
 
         self.decoder = nn.Sequential(
             # input (nz) x 1 x 1
-            nn.ConvTranspose2d(hparams.nz, hparams.nfd * 64, 2, 1, 0, bias=False),
-            nn.BatchNorm2d(hparams.nfd * 64),
-            nn.ReLU(True),
+            self.decoder_block(nz, nfd * 64, kernel_size=2, stride=1, padding=0),
             # input (nfd*64) x 2 x 2
-            nn.ConvTranspose2d(hparams.nfd * 64, hparams.nfd * 32, 4, 2, 1, bias=False),
-            nn.BatchNorm2d(hparams.nfd * 32),
-            nn.ReLU(True),
+            self.decoder_block(nfd * 64, nfd * 32),
             # input (nfd*32) x 4 x 4
-            nn.ConvTranspose2d(hparams.nfd * 32, hparams.nfd * 16, 4, 2, 1, bias=False),
-            nn.BatchNorm2d(hparams.nfd * 16),
-            nn.ReLU(True),
+            self.decoder_block(nfd * 32, nfd * 16),
             # input (nfd*16) x 8 x 8
-            nn.ConvTranspose2d(hparams.nfd * 16, hparams.nfd * 8, 4, 2, 1, bias=False),
-            nn.BatchNorm2d(hparams.nfd * 8),
-            nn.ReLU(True),
+            self.decoder_block(nfd * 16, nfd * 8),
             # input (nfd*8) x 16 x 16
-            nn.ConvTranspose2d(hparams.nfd * 8, hparams.nfd * 4, 4, 2, 1, bias=False),
-            nn.BatchNorm2d(hparams.nfd * 4),
-            nn.ReLU(True),
+            self.decoder_block(nfd * 8, nfd * 4),
             # input (nfd*4) x 32 x 32
-            nn.ConvTranspose2d(hparams.nfd * 4, hparams.nfd * 2, 4, 2, 1, bias=False),
-            nn.BatchNorm2d(hparams.nfd * 2),
-            nn.ReLU(True),
+            self.decoder_block(nfd * 4, nfd * 2),
             # input (nfd*2) x 64 x 64
-            nn.ConvTranspose2d(hparams.nfd * 2, hparams.nfd, 4, 2, 1, bias=False),
-            nn.BatchNorm2d(hparams.nfd),
-            nn.ReLU(True),
+            self.decoder_block(nfd * 2, nfd * 1),
             # input (nfd) x 128 x 128
-            nn.ConvTranspose2d(hparams.nfd, 3, 4, 2, 1, bias=False),
+            self.decoder_block(nfd, 3, last_relu=False),
             nn.Tanh()
             # output 3 x 256 x 256
         )
@@ -115,14 +112,14 @@ class Autoencoder(pl.LightningModule):
             ]
         )
 
-        self.train_dataset = FolderDataset(data_dir='/home/artem/data/COCO/CBIR_data/train',
+        self.train_dataset = FolderDataset(data_dir=f'{self.hparams.data_dir}train',
                                            load_fn=np.load,
                                            transform_fn=transform)
-        self.val_dataset = FolderDataset(data_dir='/home/artem/data/COCO/CBIR_data/val',
+        self.val_dataset = FolderDataset(data_dir=f'{self.hparams.data_dir}val',
                                          load_fn=np.load,
                                          transform_fn=transform)
 
-        self.test_dataset = FolderDataset(data_dir='/home/artem/data/COCO/CBIR_data/test',
+        self.test_dataset = FolderDataset(data_dir=f'{self.hparams.data_dir}/test',
                                           load_fn=np.load,
                                           transform_fn=transform)
 
