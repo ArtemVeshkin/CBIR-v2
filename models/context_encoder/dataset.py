@@ -1,8 +1,5 @@
 from torch.utils.data import Dataset
 import os
-import random
-
-SEED = 24
 
 
 class FolderDataset(Dataset):

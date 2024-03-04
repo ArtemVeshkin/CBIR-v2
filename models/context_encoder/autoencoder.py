@@ -21,7 +21,10 @@ class Autoencoder(pl.LightningModule):
         super().__init__()
         self.save_hyperparameters(hparams)
 
-        self.init_model(hparams)
+        self.init_model(self.hparams)
+
+        self.val_batch_masks = []
+        self.test_batch_masks = []
 
     @staticmethod
     def encoder_block(in_channels, out_channels, kernel_size=3,
@@ -83,6 +86,7 @@ class Autoencoder(pl.LightningModule):
             self.encoder_block(nf * 32, nz, 4, 1, 0),
             # output (nz) x 1 x 1
         )
+        print(self.encoder)
 
         self.decoder = nn.Sequential(
             # input (nz) x 1 x 1
@@ -158,7 +162,7 @@ class Autoencoder(pl.LightningModule):
                     lr=self.hparams.lr,
                     betas=(0.9, 0.999))
 
-    def save_images(self, x, output, name, n=8):
+    def save_images(self, x, output, batch_mask, name, n=8):
         """
         Saves a plot of n images from input and output batch
         """
@@ -167,18 +171,21 @@ class Autoencoder(pl.LightningModule):
         # denormalize images
         denormalization = transforms.Normalize((-MEAN / STD).tolist(), (1.0 / STD).tolist())
         input = [denormalization(i) for i in x[:n]]
+        masked_input = [(denormalization(i) + (1 - mask)).clamp(0., 1.)
+                        for i, mask in zip(x[:n], batch_mask[:n])]
         raw_output = [denormalization(i) for i in output[:n]]
 
         # make grids and save to logger
         grid_input = vutils.make_grid(input, nrow=n)
+        grid_masked_input = vutils.make_grid(masked_input, nrow=n)
         grid_raw_output = vutils.make_grid(raw_output, nrow=n)
-        grid = torch.cat((grid_input, grid_raw_output), 1)
+        grid = torch.cat((grid_input, grid_masked_input, grid_raw_output), 1)
         self.logger.experiment.add_image(name, grid, self.global_step)
 
     def generate_batch_mask(self, batch):
         bs, _, w, h = batch.shape
         fake_batch = np.ones((bs, w, h, 3), dtype=np.float32)
-        cutout = iaa.Sequential([iaa.Cutout(size=0.35, nb_iterations=(2, 5),
+        cutout = iaa.Sequential([iaa.Cutout(size=0.15, nb_iterations=(2, 5),
                                             fill_mode='constant', cval=0.)])
         batch_mask = cutout(images=fake_batch)
         batch_mask = batch_mask.transpose(0, 3, 1, 2)
@@ -187,16 +194,21 @@ class Autoencoder(pl.LightningModule):
         return batch_mask
 
     def training_step(self, batch, batch_idx):
-        output = self(batch)
+        batch_mask = self.generate_batch_mask(batch)
+        masked_batch = batch * batch_mask
+        # output = self(masked_batch)
+        output = self(torch.cat((masked_batch,
+                                 1 - batch_mask[:, 0:1, :, :]), 1))
         loss = F.mse_loss(output, batch)
 
         # save input and output images at beginning of epoch
         if batch_idx == 0:
-            self.save_images(batch, output, "train_input_output")
+            self.save_images(batch, output, batch_mask, "train_input_output")
 
         self.logger.experiment.add_scalars('loss',
                                            {'train': loss}, self.global_step)
 
+        masked_batch.detach().cpu()
         return {
             'loss': loss
         }
@@ -206,14 +218,22 @@ class Autoencoder(pl.LightningModule):
         self.val_loss = []
 
     def validation_step(self, batch, batch_idx):
-        output = self(batch)
+        if len(self.val_batch_masks) < batch_idx + 1:
+            self.val_batch_masks.append(self.generate_batch_mask(batch).detach().cpu())
+        batch_mask = self.val_batch_masks[batch_idx].to(self.device)
+
+        masked_batch = batch * batch_mask
+        # output = self(masked_batch)
+        output = self(torch.cat((masked_batch,
+                                 1 - batch_mask[:, 0:1, :, :]), 1))
         loss = (F.mse_loss(output, batch)).detach().cpu()
 
         # save input and output images at beginning of epoch
         if batch_idx == 1:
-            self.save_images(batch, output, "val_input_output")
+            self.save_images(batch, output, batch_mask, "val_input_output")
 
         self.val_loss += [loss]
+        batch_mask = batch_mask.detach().cpu()
 
     def on_validation_epoch_end(self):
         avg_loss = torch.stack(self.val_loss).mean()
@@ -225,14 +245,21 @@ class Autoencoder(pl.LightningModule):
         self.test_loss = []
 
     def test_step(self, batch, batch_idx):
-        output = self(batch)
+        if len(self.test_batch_masks) < batch_idx + 1:
+            self.test_batch_masks.append(self.generate_batch_mask(batch).detach().cpu())
+        batch_mask = self.test_batch_masks[batch_idx].to(self.device)
+        masked_batch = batch * batch_mask
+        # output = self(masked_batch)
+        output = self(torch.cat((masked_batch,
+                                 1 - batch_mask[:, 0:1, :, :]), 1))
         loss = (F.mse_loss(output, batch)).detach().cpu()
 
         # save input and output images at beginning of epoch
         if batch_idx == 0:
-            self.save_images(batch, output, "test_input_output")
+            self.save_images(batch, output, batch_mask, "test_input_output")
 
         self.test_loss += [loss]
+        batch_mask = batch_mask.detach().cpu()
 
     def on_test_epoch_end(self):
         avg_loss = torch.stack(self.test_loss).mean()
