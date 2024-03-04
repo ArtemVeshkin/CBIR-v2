@@ -47,15 +47,17 @@ def build_model(cfg: CfgNode) -> nn.Module:
     model = BACKBONES.get(name)()
 
     load_checkpoint = cfg[cfg.name]["load_checkpoint"]
+    state_dict = None
     if 'torchvision' in load_checkpoint:
         arch = load_checkpoint.split('://')[-1]
         state_dict = load_state_dict_from_url(model_urls[arch], progress=True)
-    else:
+    elif load_checkpoint != '':
         state_dict = torch.load(load_checkpoint)
 
     try:
         model.load_state_dict(state_dict, strict=False)
     except:
-        load_state_dict(model, state_dict)
+        if state_dict is not None:
+            load_state_dict(model, state_dict)
 
     return model
